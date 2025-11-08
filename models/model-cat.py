@@ -470,3 +470,4 @@ if __name__ == "__main__":
 
     print(f"\nModels & meta saved to: {SAVE_DIR}")
     print("推理提示：先出 p10/p50/p90 → 乘市场系数 M_t（默认用平滑版）→ 按分组取 q_hat → 返回区间与点价。")
+
