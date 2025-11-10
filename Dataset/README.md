@@ -1,6 +1,8 @@
 # 数据集
-_Full_dataset.csv_ 是最终的全部数据集，包含一下
+_Full_dataset.csv_ 是最终的全部数据集，包含以下
+
 _Car_details_processed.csv_ 合并 _Car details v3/v4_ 并清洗
+
 _used_cars_processed.csv_ 修改 _used_cars.csv_ 并清洗
 
 ## 说明
