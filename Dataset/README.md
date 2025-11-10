@@ -12,13 +12,13 @@ _used_cars_processed.csv_ 修改 _used_cars.csv_ 并清洗
 
 行驶里程数：单位 $km$
 
-燃料类型：为$Petrol$,$Petrol$,$Other$其一
+燃料类型：为 $Petrol$ , $Petrol$ , $Other$ 其一
 
 引擎排量：单位 $CC$
 
 最大马力：单位 $bhp$
 
-变速类型：为$Manual$,$Automatic$其一
+变速类型：为 $Manual$ , $Automatic$ 其一
 
 价格：单位为印度卢比，除83.4换成美元
 
