@@ -1,44 +1,43 @@
 # 基于Full_dataset.csv的进一步分析
 ## Part 1 数据处理/清洗
 主要工作：object型数据转换为数值型数据  
-Data columns (total 11 columns):  
-     Column        Non-Null Count  Dtype     
----  ------        --------------  -----   
- 0   Brand         12646 non-null  object   
- 1   Model         12646 non-null  object  
- 2   Year          12646 non-null  int64     
- 3   Age           12646 non-null  int64    
- 4   Kilometer     12646 non-null  int64    
- 5   Fuel Type     12646 non-null  object    
- 6   Engine        12478 non-null  float64   
- 7   Max Power     12646 non-null  object  
- 8   Transmission  12646 non-null  object   
- 9   Seats         12646 non-null  int64   
- 10  Price         12646 non-null  int64    
+| Column        | Non-Null Count | Dtype   |
+|---------------|-----------------|---------|
+| Brand         | 12646 non-null  | object  |
+| Model         | 12646 non-null  | object  |
+| Year          | 12646 non-null  | int64   |
+| Age           | 12646 non-null  | int64   |
+| Kilometer     | 12646 non-null  | int64   |
+| Fuel Type     | 12646 non-null  | object  |
+| Engine        | 12478 non-null  | float64 |
+| Max Power     | 12646 non-null  | object  |
+| Transmission  | 12646 non-null  | object  |
+| Seats         | 12646 non-null  | int64   |
+| Price         | 12646 non-null  | int64   |
+
 dtypes: float64(1), int64(5), object(5)  
 
-将$Fuel Type$编码: 'Diesel': 1,'Petrol': 0,'Other': 2  
-将$Transmission$编码: 'Manual': 1, 'Automatic': 0  
-将$Max Power$的错误类型转换成数值型  
+将Fuel Type编码: 'Diesel': 1,'Petrol': 0,'Other': 2  
+将Transmission编码: 'Manual': 1, 'Automatic': 0  
+将Max Power的错误类型转换成数值型  
 
 最终结果：  
-Data columns (total 13 columns):  
-     Column             Non-Null Count  Dtype  
----  ------             --------------  -----  
- 0   Brand              12474 non-null  object  
- 1   Model              12474 non-null  object  
- 2   Year               12474 non-null  int64  
- 3   Age                12474 non-null  int64  
- 4   Kilometer          12474 non-null  int64  
- ~~5   Fuel Type          12474 non-null  object~~    
- 6   Engine             12474 non-null  float64  
- 7   Max Power          12474 non-null  float64  
- ~~8   Transmission       12474 non-null  object~~    
- 9   Seats              12474 non-null  int64  
- 10  Price              12474 non-null  int64  
- 11  Transmission_code  12474 non-null  int64  
- 12  Fuel Type_code     12474 non-null  int64  
-dtypes: float64(2), int64(7), object(4)  
+| Column             | Non-Null Count | Dtype   |
+|--------------------|-----------------|---------|
+| Brand              | 12474 non-null  | object  |
+| Model              | 12474 non-null  | object  |
+| Year               | 12474 non-null  | int64   |
+| Age                | 12474 non-null  | int64   |
+| Kilometer          | 12474 non-null  | int64   |
+| ~~Fuel Type~~      | 12474 non-null  | object  |
+| Engine             | 12474 non-null  | float64 |
+| Max Power          | 12474 non-null  | float64 |
+| ~~Transmission~~   | 12474 non-null  | object  |
+| Seats              | 12474 non-null  | int64   |
+| Price              | 12474 non-null  | int64   |
+| Transmission_code  | 12474 non-null  | int64   |
+| Fuel Type_code     | 12474 non-null  | int64   |
+
 
 **TODO : 异常值/缺失值处理**
 
