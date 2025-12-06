@@ -1,0 +1,33 @@
+# pyproject.toml
+
+[tool.ruff]
+target-version = "py314" 
+line-length = 128
+
+[tool.ruff.lint]
+# E: pycodestyle
+# F: Pyflakes
+# I: isort
+# B: flake8-bugbear
+# UP: pyupgrade
+select = ["E", "F", "I", "B", "UP"]
+
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.14"
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "sklearn.*",
+    "pandas.*",
+    "matplotlib.*",
+    "joblib.*",
+    "catboost.*",
+]
+ignore_missing_imports = true

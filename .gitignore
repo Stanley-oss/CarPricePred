@@ -1,0 +1,7 @@
+/venv/
+.DS_Store
+.idea/
+.vscode/
+.mypy_cache/
+catboost_info/
+__pycache__/
