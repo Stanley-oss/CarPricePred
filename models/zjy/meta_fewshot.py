@@ -24,11 +24,11 @@ from datetime import datetime
 
 @dataclass
 class FewShotConfig:
-    csv_path: str                  # Full_dataset.csv 的路径
-    min_group_size: int = 30       # (Brand, Model, Year) 样本数 >= 这个值就认为“不少”，不做 few-shot
-    max_support_size: int = 200    # 支持集最多使用多少条样本
-    k_neighbors: int = 50          # KNN 中最多取多少邻居
-    new_car_max_age: float = 3.0   # Age <= 这个阈值认为是“新车”，才会考虑 few-shot 迁移
+    csv_path: str                 # Full_dataset.csv 的路径，全量训练数据 Full_dataset.csv 的路径，这就是我们的“经验库”
+    min_group_size: int = 30       # (Brand, Model, Year) 样本数 >= 这个值就认为“不少”，不做 few-shot,每个 (Brand, Model, Year) 的最小样本数阈值，默认是 30。如果某个品牌+型号+年份的样本数 ≥ 30，说明数据其实不少，我们就认为主模型足够可靠，不再启用 few-shot 调整
+    max_support_size: int = 200    # 支持集最多使用多少条样本,同一品牌同一车型的历史支持样本最多用多少条，默认 200，防止 KNN 计算量太大；
+    k_neighbors: int = 50          # KNN 中最多取多少邻居,KNN 中最多取多少最近邻，默认 50。
+    new_car_max_age: float = 3.0   # Age <= 这个阈值认为是“新车”，才会考虑 few-shot 迁移,新车的年龄阈值，默认是 3 年。只有 车龄 Age ≤ 3 年 的车，才有资格走元学习逻辑；
 
 
 # ===================== 工具函数 =====================
@@ -107,11 +107,11 @@ class FewShotKnnMeta:
             "Transmission": "transmission",
             "Seats": "seats",
             "Price": "price",
-        })
+        })#把原始 CSV 中的列，比如 "Brand", "Model", "Fuel Type" 等，统一成小写无空格的字段名：brand, model, fuel_type 等；
 
         # 数值化
         for col in ["year", "age", "milage", "engine", "max_power", "seats", "price"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = pd.to_numeric(df[col], errors="coerce")#对 year, age, milage, engine, max_power, seats, price 这些关键字段，用 pd.to_numeric 转成数值，非法的转成 NaN。
 
         # 如果 Age 缺失，用“当前年份 - Year”近似补一下车龄
         now_year = datetime.now().year
@@ -119,7 +119,7 @@ class FewShotKnnMeta:
         df.loc[mask_age_na, "age"] = now_year - df.loc[mask_age_na, "year"]
 
         # 基本清洗：价格必须存在
-        df = df[df["price"].notna()].copy()
+        df = df[df["price"].notna()].copy()#价格缺失的行删掉
 
         # 统一 brand/model Key
         df["brand_key"] = df["brand"].apply(_norm_str)
@@ -131,12 +131,12 @@ class FewShotKnnMeta:
             df["brand_key"].fillna("") + "||" +
             df["model_key"].fillna("") + "||" +
             df["year_int"].fillna(-1).astype(int).astype(str)
-        )
+        )#把品牌、型号分别做了一个 _norm_str 处理：小写 + 去空格；再把 year 取整，拼成一个字符串：group_id = brand_key || model_key || year_int
 
         # 统计每个 (brand, model, year) 的样本量
         self._group_counts = df["_group_id"].value_counts().to_dict()
-        self._group_ids = df["_group_id"].to_numpy()
-
+        self._group_ids = df["_group_id"].to_numpy()#用 value_counts() 统计出每个 group_id 的样本数量，存到 self._group_counts；同时保存每条样本对应的 group_id 数组到 self._group_ids。
+#后面在 maybe_adapt 里面，我们可以很快知道当前这辆车所属的 (品牌, 型号, 年份) 一共在历史数据里有多少条样本。
         # 特征矩阵（KNN 用）
         feat_cols = ["age", "milage", "engine", "max_power", "seats"]
         X_raw = df[feat_cols].to_numpy(dtype=float)
@@ -144,33 +144,36 @@ class FewShotKnnMeta:
         # 用列均值填 NaN
         col_means = np.nanmean(X_raw, axis=0)
         idx_nan = np.where(~np.isfinite(X_raw))
-        X_raw[idx_nan] = np.take(col_means, idx_nan[1])
+        X_raw[idx_nan] = np.take(col_means, idx_nan[1])#用列均值填补缺失值;
 
         # 标准化
         col_stds = np.nanstd(X_raw, axis=0)
         col_stds[col_stds == 0] = 1.0
-        X_norm = (X_raw - col_means) / col_stds
+        X_norm = (X_raw - col_means) / col_stds#对每一列做标准化 (x - mean) / std，保存均值和标准差到 self._feature_means 和 self._feature_stds。
 
         self._df = df
-        self._X = X_norm
-        self._y = df["price"].to_numpy(dtype=float)
+        self._X = X_norm#标准化后的特征矩阵，后面做 KNN 就在这个空间里算欧式距离；
+        self._y = df["price"].to_numpy(dtype=float)#对应的真实价格数组。
         self._feature_means = col_means
         self._feature_stds = col_stds
 
     # ---------- 对单条样本做“也许”元学习调整 ----------
 
     def maybe_adapt(self, d: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
+        #给定一辆车的原始特征 d，以及主模型的预测结果 base，决定要不要做 few-shot 调整；如果要，就算出一个新的 (lo, p50, hi)，返回融合后的结果。
+        #d:原始样本，是一个字典，包含品牌、型号、年份、Age、里程、发动机、最大功率等；
+        #base：基础模型的预测结果，也是一个字典，至少会有 "p50", "lo", "hi", "wr" 这些键。
         """
         d: 你在 predict_price 里传进来的原始 dict（包含 brand/model/year/age/milage/engine/max_power/seats 等）
         base: _base_predict_price(d) 的输出字典，必须至少包含：
               - "p50", "lo", "hi", "wr"
         返回：可能经过 few-shot 调整后的结果字典
         """
-        self._ensure_loaded()
+        self._ensure_loaded()#调用 _ensure_loaded() 确保经验库已经加载；
         cfg = self.cfg
 
         # ---------- 从输入样本中取出关键信息 ----------
-        brand_raw = d.get("brand") or d.get("Brand")
+        brand_raw = d.get("brand") or d.get("Brand")#从 d 里读出 brand、model、year、age，并且兼容大小写，比如既支持 "brand" 又支持 "Brand"
         model_raw = d.get("model") or d.get("Model")
         year_raw = d.get("year") or d.get("Year")
         age_raw = d.get("age") or d.get("Age")
@@ -178,20 +181,20 @@ class FewShotKnnMeta:
         brand_key = _norm_str(brand_raw)
         model_key = _norm_str(model_raw)
         year_val = _to_number(year_raw)
-        age_val = _to_number(age_raw)
+        age_val = _to_number(age_raw)#用 _to_number 和 _norm_str 把年份和年龄转成数字，把品牌/型号转成规范化的字符串 key；
 
         # 尽量保证 Age 有值
         if not np.isfinite(age_val):
             if np.isfinite(year_val):
-                age_val = datetime.now().year - year_val
+                age_val = datetime.now().year - year_val#如果 age 缺失但 year 存在，会用当前年份减去 year 估算一个年龄；
 
         # 如果 Age 仍然拿不到，就放弃 few-shot
         if not np.isfinite(age_val):
-            return base
+            return base#如果最终还是得不到有效的 age，直接返回 base，不做任何调整。
 
         # 只对“新车”做 few-shot
         if age_val > cfg.new_car_max_age:
-            return base
+            return base#如果 age_val > new_car_max_age，也就是车龄大于配置里的新车阈值（默认 3 年），那就直接 return base。
 
         # group_id = brand||model||year_int
         year_int = int(year_val) if np.isfinite(year_val) else -1
@@ -200,17 +203,17 @@ class FewShotKnnMeta:
 
         # 如果这个 (brand, model, year) 样本数已经不少了，也不用 few-shot
         if n_group >= cfg.min_group_size:
-            return base
+            return base#然后，根据品牌、型号和年份，构造当前样本的 group_id：group_id = brand_key || model_key || year_int,再从一开始统计好的 self._group_counts 里查这个 group_id 的样本数 n_group。如果 n_group ≥ min_group_size（默认 30），说明这款车在历史数据里样本并不少，主模型本身就有足够的经验，这时也直接返回 base。
 
         # brand / model 至少要有，才能找“同车型家族”的 support
         if not brand_key or not model_key:
-            return base
+            return base#品牌和型号有没有值；在全量数据 self._df 里面，按同品牌、同车型筛选出来的“家族样本”是否为空。
 
         df = self._df
 
         # 从全量数据中，选同品牌同车型（不限制年份）的支持集
         mask_family = (df["brand_key"] == brand_key) & (df["model_key"] == model_key)
-        family_idx = np.where(mask_family)[0]
+        family_idx = np.where(mask_family)[0]#家族筛选只要求 brand 和 model 一样，不要求 year 一样。
 
         if len(family_idx) == 0:
             # 训练集中完全没有这个品牌或型号
@@ -220,9 +223,9 @@ class FewShotKnnMeta:
         if len(family_idx) > cfg.max_support_size:
             year_train = df["year_int"].to_numpy()[family_idx].astype(float)
             if np.isfinite(year_val):
-                year_diff = np.abs(year_train - year_val)
+                year_diff = np.abs(year_train - year_val)#计算每条家族样本的 year_diff = |year_train - year_val|；
                 order = np.argsort(year_diff)
-                family_idx = family_idx[order[:cfg.max_support_size]]
+                family_idx = family_idx[order[:cfg.max_support_size]]#按 year_diff 从小到大排序，取最近的 max_support_size 条.
             else:
                 family_idx = family_idx[:cfg.max_support_size]
 
@@ -240,16 +243,16 @@ class FewShotKnnMeta:
             if not np.isfinite(x_query_raw[j]):
                 x_query_raw[j] = self._feature_means[j]
 
-        x_query_norm = (x_query_raw - self._feature_means) / self._feature_stds
+        x_query_norm = (x_query_raw - self._feature_means) / self._feature_stds#这些字段同样通过 _to_number 统一转成数值，缺失的用全局均值填补，然后用一开始保存的 mean/std 做标准化，变成一个标准化后的查询向量 x_query_norm。
 
         # ---------- 在同品牌同车型家族里做 KNN ----------
-        X_family = self._X[family_idx]
-        diff = X_family - x_query_norm
+        X_family = self._X[family_idx]#从 self._X 里取出同一 family 的矩阵 X_family；
+        diff = X_family - x_query_norm#对每一行计算与 x_query_norm 的欧式距离；
         dist = np.sqrt(np.sum(diff * diff, axis=1))
 
         order = np.argsort(dist)
         k = min(cfg.k_neighbors, len(order))
-        knn_idx = family_idx[order[:k]]
+        knn_idx = family_idx[order[:k]]#按距离从小到大排序，取前 k_neighbors 个索引，这就是我们真正的邻居集合。
 
         y_knn = self._y[knn_idx]
         y_knn = y_knn[np.isfinite(y_knn)]
@@ -257,55 +260,55 @@ class FewShotKnnMeta:
             # 邻居太少，效果不稳定，放弃调整
             return base
 
-        q10_local = float(np.quantile(y_knn, 0.10))
-        q50_local = float(np.quantile(y_knn, 0.50))
-        q90_local = float(np.quantile(y_knn, 0.90))
-
+        q10_local = float(np.quantile(y_knn, 0.10))#q10_local：10% 分位
+        q50_local = float(np.quantile(y_knn, 0.50))#q50_local：50% 分位（中位数）
+        q90_local = float(np.quantile(y_knn, 0.90))#q90_local：90% 分位
+#我们不再仅仅相信全局模型，而是看看同款车在历史上大概都卖多少钱，有一个经验区间。
         # ---------- 与基础预测融合 ----------
         p50_base = float(base.get("p50", np.nan))
         lo_base = float(base.get("lo", np.nan))
         hi_base = float(base.get("hi", np.nan))
 
         if not np.isfinite(p50_base) or p50_base <= 0:
-            return base
+            return base#如果 p50_base 本身就不合理，比如不是正数，那就不再往下走，直接返回 base。
 
         # 样本越少 & 车越新 -> 权重越大
-        w_size = max(0.0, min(1.0, (cfg.min_group_size - n_group) / float(cfg.min_group_size)))
-        w_age = max(0.0, min(1.0, (cfg.new_car_max_age - age_val) / float(cfg.new_car_max_age)))
-        w = w_size * w_age
+        w_size = max(0.0, min(1.0, (cfg.min_group_size - n_group) / float(cfg.min_group_size)))#当样本数 n_group 越少，w_size 越接近 1；当样本数逼近 min_group_size，w_size 会趋近 0。
+        w_age = max(0.0, min(1.0, (cfg.new_car_max_age - age_val) / float(cfg.new_car_max_age)))#车越新，age 越小，w_age 越接近 1；车越接近新车阈值（比如 3 岁），w_age 越接近 0。
+        w = w_size * w_age#只有同时满足“样本少”和“车很新”，few-shot 的权重才会大；只满足一个条件，则权重会明显下降。
 
         if w <= 0.0:
-            return base
+            return base#如果算出的 w ≤ 0，那说明综合条件不够，就不再调整。
 
         # 融合后的中位数，夹在本家族 q10~q90 之间
-        p50_meta = (1.0 - w) * p50_base + w * q50_local
-        p50_meta = float(np.clip(p50_meta, q10_local, q90_local))
+        p50_meta = (1.0 - w) * p50_base + w * q50_local#在有了 w 之后，代码做了一步线性插值：当 w 接近 0 时，几乎就是原始的基础模型输出；当 w 接近 1 时，几乎就是家族历史中位数。
+        p50_meta = float(np.clip(p50_meta, q10_local, q90_local))#无论元学习权重多大，中位数都不应该超出同款车历史 10%~90% 的合理价格区间。
 
         scale = p50_meta / p50_base if p50_base > 0 else 1.0
         lo_meta = lo_base * scale
-        hi_meta = hi_base * scale
+        hi_meta = hi_base * scale#在得到新的中位数之后，区间上下界不是重新学的，而是通过一个比例因子来整体缩放：我们保持原来基础模型区间的形状，只是整体向上或向下缩放，使其中心对齐到新的 p50_meta。
 
         # 组装输出
         out = dict(base)  # 复制一份
         out["p50_before_meta"] = p50_base
         out["lo_before_meta"] = lo_base
-        out["hi_before_meta"] = hi_base
+        out["hi_before_meta"] = hi_base#保留调整前的参考值；
 
         out["p50"] = float(p50_meta)
         out["lo"] = float(max(0.0, lo_meta))
-        out["hi"] = float(max(out["lo"], hi_meta))
-        out["wr"] = float((out["hi"] - out["lo"]) / max(1e-6, out["p50"]))
+        out["hi"] = float(max(out["lo"], hi_meta))#调整后的最终输出；
+        out["wr"] = float((out["hi"] - out["lo"]) / max(1e-6, out["p50"]))#表示区间宽度占中位数的比例。
 
         out["meta_info"] = {
-            "enabled": True,
-            "is_new_car": True,
-            "age": float(age_val),
-            "n_group": int(n_group),
-            "w_meta": float(w),
-            "k_neighbors": int(k),
-            "support_size": int(len(family_idx)),
+            "enabled": True,#是否启用了 few-shot；
+            "is_new_car": True,#确认这是新车；
+            "age": float(age_val),#车龄；
+            "n_group": int(n_group),#该 (Brand, Model, Year) 的样本数；
+            "w_meta": float(w),#最终元学习权重 w；
+            "k_neighbors": int(k),#实际选取的邻居数量；
+            "support_size": int(len(family_idx)),#用了多少条同品牌同车型样本作为支持集；
             "q10_local": q10_local,
             "q50_local": q50_local,
-            "q90_local": q90_local,
+            "q90_local": q90_local,#家族价格分布。
         }
         return out
