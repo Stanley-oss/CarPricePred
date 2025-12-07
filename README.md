@@ -18,6 +18,8 @@ Then run:
 ```
 nvm install 22
 uvm use 22
+cd frontend
+npm install
 ```
 # How to Run:
 ## Method 1: One-Click Launch (Recommended)
@@ -30,6 +32,7 @@ Double-click ***run_app.bat*** in the project root directory. <br>
 Linux / macOS users: <br>
 Run in Terminal:
 ```
+chmod +x run_app.sh
 ./run_app.sh
 ```
 ## Method 2: Manual Startup
