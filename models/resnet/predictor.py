@@ -154,6 +154,12 @@ class ResnetCarPricePredictor:
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
 
+        if not self.load_model():
+            print("No saved model found or files missing. Starting training...")
+            self.train_model()
+        else:
+            print("Model loaded successfully.")
+
     def get_data_strategy(self, file_path, batch_size=64):
         """
         重构后的数据处理，增加返回值以便保存预处理参数
@@ -431,23 +437,13 @@ class ResnetCarPricePredictor:
         self.model.eval()
         return True
 
-    def initialize(self):
-        """
-        启动入口：检查并加载，或者重新训练
-        """
-        if not self.load_model():
-            print("No saved model found or files missing. Starting training...")
-            self.train_model()
-        else:
-            print("Model loaded successfully.")
-
     def predict_price(self, data_dict):
         """
         单条数据预测接口
         data_dict: 包含车辆信息的字典
         """
         if self.model is None:
-            raise RuntimeError("Model is not initialized. Call initialize() first.")
+            raise RuntimeError("Model is not initialized.")
 
         # 1. 构造数据
         row_data = {
@@ -529,14 +525,12 @@ class ResnetCarPricePredictor:
             # 反归一化
             pred_core_log = prep["scaler_y"].inverse_transform(pred_core_norm.reshape(-1, 1)).flatten()[0]
 
-            # [Debug Print]
-            # 这会让你确信 bias 到底有没有取到
-            print("-" * 30)
-            print("Debug Info:")
-            print(f"Brand: {row_data['Brand']} | Bias: {brand_bias}")
-            print(f"Fuel : {row_data['Fuel Type']} | Bias: {fuel_bias}")
-            print(f"Core Log: {pred_core_log:.4f}")
-            print("-" * 30)
+            # print("-" * 30)
+            # print("Debug Info:")
+            # print(f"Brand: {row_data['Brand']} | Bias: {brand_bias}")
+            # print(f"Fuel : {row_data['Fuel Type']} | Bias: {fuel_bias}")
+            # print(f"Core Log: {pred_core_log:.4f}")
+            # print("-" * 30)
 
             # 加上 Bias
             final_log_pred = pred_core_log + brand_bias + fuel_bias
@@ -552,8 +546,6 @@ class ResnetCarPricePredictor:
 # ==========================================
 if __name__ == "__main__":
     predictor = ResnetCarPricePredictor()
-
-    predictor.initialize()
 
     payload = {
         "brand": "Toyota",

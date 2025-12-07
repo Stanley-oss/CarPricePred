@@ -6,7 +6,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 from joblib import load
-from meta_fewshot import FewShotConfig, FewShotKnnMeta
+
+from models.catmodel.meta_fewshot import FewShotConfig, FewShotKnnMeta
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(CURRENT_DIR, "model")

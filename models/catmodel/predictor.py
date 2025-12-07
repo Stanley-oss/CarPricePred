@@ -18,7 +18,7 @@ class CatboostCarPricePredictor:
             if current_dir not in sys.path:
                 sys.path.append(current_dir)
 
-            from predict_price import predict_price
+            from models.catmodel.predict_price import predict_price
 
             self._predictor_func = predict_price
             self._model_loaded = True
