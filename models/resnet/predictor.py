@@ -555,9 +555,6 @@ if __name__ == "__main__":
 
     predictor.initialize()
 
-    (train_dl, test_dl, prep_pack) = predictor.get_data_strategy(CSV_PATH, BATCH_SIZE)
-    predictor.evaluate(test_dl)
-
     payload = {
         "brand": "Toyota",
         "model": "Corolla",
@@ -573,8 +570,6 @@ if __name__ == "__main__":
 
     try:
         price = predictor.predict_price(payload)
-        print("\n" + "=" * 40)
         print(f"Predicted Price for Sample: {price:,.2f}")
-        print("=" * 40)
     except Exception as e:
         print(f"Prediction failed: {e}")

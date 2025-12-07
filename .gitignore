@@ -5,3 +5,4 @@
 .mypy_cache/
 catboost_info/
 __pycache__/
+predictor_new.py
