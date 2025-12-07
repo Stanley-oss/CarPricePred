@@ -548,6 +548,7 @@ if __name__ == "__main__":
         "max_power": 150,
         "transmission": "Automatic",
         "seats": 5,
+        "listing_date": "2025-01-01",
     }
 
     try:
