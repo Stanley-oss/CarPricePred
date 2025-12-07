@@ -155,10 +155,8 @@ class ResnetCarPricePredictor:
             os.makedirs(model_dir)
 
         if not self.load_model():
-            print("No saved model found or files missing. Starting training...")
+            print("Warning: No saved model found or files missing. Starting training...")
             self.train_model()
-        else:
-            print("Model loaded successfully.")
 
     def get_data_strategy(self, file_path, batch_size=64):
         """
@@ -420,7 +418,6 @@ class ResnetCarPricePredictor:
         if not os.path.exists(self.model_path) or not os.path.exists(self.preprocessor_path):
             return False
 
-        print("Loading existing model and preprocessors...")
         # 1. 加载预处理器
         with open(self.preprocessor_path, "rb") as f:
             self.preprocessor_data = pickle.load(f)
