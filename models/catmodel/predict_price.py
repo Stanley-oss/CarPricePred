@@ -20,18 +20,27 @@ MAX_HALF_WIDTH = 60000.0  # 你定死的展示半宽：6 万
 
 def clamp_interval_to_60k(p50, lo_raw, hi_raw, max_half=MAX_HALF_WIDTH):
     """
-    把原始区间 (lo_raw, hi_raw) 以 p50 为中心截断到最多 ±max_half。
-    返回截断后的 (lo_show, hi_show)。
+    分别限制上下界的偏离程度，保留 CQR 的非对称性
     """
-    mid = float(p50)
+    p50 = float(p50)
     lo_raw = float(lo_raw)
     hi_raw = float(hi_raw)
 
-    half_raw = max(mid - lo_raw, hi_raw - mid)  # 原始最大偏差
-    half_new = min(half_raw, max_half)  # 不超过 6 万
+    # 1. 计算原始偏离量 (必须保证非负，虽然理论上 lo <= p50 <= hi，但防万一)
+    diff_lo = max(0.0, p50 - lo_raw)
+    diff_hi = max(0.0, hi_raw - p50)
 
-    lo_show = mid - half_new
-    hi_show = mid + half_new
+    # 2. 分别截断
+    new_diff_lo = min(diff_lo, max_half)
+    new_diff_hi = min(diff_hi, max_half)
+
+    # 3. 重新计算边界
+    lo_show = p50 - new_diff_lo
+    hi_show = p50 + new_diff_hi
+
+    # 记录原始最大半宽用于统计
+    half_raw = max(diff_lo, diff_hi)
+
     return lo_show, hi_show, half_raw
 
 
@@ -340,54 +349,55 @@ _FEWSHOT_ADAPTER = FewShotKnnMeta(_FEWSHOT_CFG)
 
 
 def _base_predict_price(d):
-    X, period, period_bin, age_val = build_row(d)  # 调用 build_row 构造特征，拿到一行特征、时间段和车龄。
+    X, period, period_bin, age_val = build_row(d)
 
     # 模型输出 log(price)
     p10_log = m_p10.predict(X)
     p50_log = m_p50.predict(X)
     p90_log = m_p90.predict(X)
+
+    # 还原为价格
     p10 = float(np.exp(np.asarray(p10_log).item()))
     p50 = float(np.exp(np.asarray(p50_log).item()))
-    p90 = float(
-        np.exp(np.asarray(p90_log).item())
-    )  # 三个 CatBoost 模型输出 log-price，得到的是 log(price) 的预测值。随后用 exp 还原到价格空间：
+    p90 = float(np.exp(np.asarray(p90_log).item()))
+
+    # 物理约束：确保 p10 <= p50 <= p90 (CatBoost Quantile 不保证这一点)
+    p10 = min(p10, p50)
+    p90 = max(p90, p50)
 
     # 市场系数
     M = get_market_multiplier(period)
-    p10_m, p50_m, p90_m = p10 * M, p50 * M, p90 * M  # 让预测价格与当前时期的整体市场水平对齐
-    # 构造 CQR 分组键 & 局部残差校准
-    # 分组键（period_bin）
+    p10_m, p50_m, p90_m = p10 * M, p50 * M, p90 * M
+
+    # 构造 CQR 分组键
     akey = age_bin(age_val)
     fuel = standardize_fuel(d.get("fuel_type"))
     gear = standardize_gear(d.get("transmission"))
     key_full = f"{akey}|{fuel}|{gear}|{period_bin}"
 
-    # 非对称 CQR 逐级回退
+    # 非对称 CQR 逐级回退 -> 得到的是绝对金额残差 (Rupees)
     qlo, qhi = hierarchical_qhat_asym(key_full)
-    # 在训练集上，我们统计过模型预测和真实价格之间的误差，并把这些误差在不同分组下的分布做了分解。
-    # qlo 对应的是“下界还需要减去多少”；qhi 对应的是“上界还需要加上多少”。
-    # 下界在 p10_m 的基础上再减一个 qlo；上界在 p90_m 的基础上再加一个 qhi；
-    # 同时保证 lo 不小于 0；wr 是一个区间宽度比，表示不确定性。
 
-    # 原始区间（未截断）——先根据比例算出 lo_raw / hi_raw
-    lo_raw = max(0.0, p10_m - qlo * p50_m)
-    hi_raw = p90_m + qhi * p50_m
+    # === 核心修复：直接加减绝对值，不要乘 p50 ===
+    lo_raw = max(0.0, p10_m - qlo)
+    hi_raw = p90_m + qhi
 
-    # 再做一步“展示截断”：保证最终区间最大 ±6 万
+    # 再次物理约束
+    lo_raw = min(lo_raw, p50_m)
+    hi_raw = max(hi_raw, p50_m)
+
+    # 展示截断 (保留非对称性)
     lo_show, hi_show, _half_raw = clamp_interval_to_60k(p50_m, lo_raw, hi_raw)
 
-    # 对外展示用的 WR（基于截断后的区间）
+    # 计算 WR
     wr_show = (hi_show - lo_show) / max(1e-6, p50_m)
-    # 内部原始 WR，方便你以后调参时看
     wr_raw = (hi_raw - lo_raw) / max(1e-6, p50_m)
 
     return {
         "p50": float(p50_m),
-        # 展示给用户看的区间（已经截断到 ±6 万）
         "lo": float(lo_show),
         "hi": float(hi_show),
         "wr": float(wr_show),
-        # 下面这些是“内部真实区间”，方便你调模型时看，不在 CLI 中一定要用
         "lo_raw": float(lo_raw),
         "hi_raw": float(hi_raw),
         "wr_raw": float(wr_raw),
@@ -396,8 +406,6 @@ def _base_predict_price(d):
         "period_bin": period_bin,
         "market_multiplier": float(M),
     }
-    # p50, lo, hi, wr：基础预测结果；group_key：用于 CQR 的分组键；
-    # period, period_bin：时间相关信息；market_multiplier：本次使用的市场指数。
 
 
 def predict_price(d):
