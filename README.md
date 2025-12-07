@@ -2,21 +2,16 @@
 
 # Setup:
 ## Backend:
-Create a new environment:
-```
-python -m venv venv
-```
-Activate the environment:
 Windows:
 ```
+python -m venv venv
 .\venv\Scripts\activate
+pip install -r requirements.txt
 ```
 Linux / macOS:
 ```
+python3 -m venv venv
 source venv/bin/activate
-```
-Install dependencies:
-```
 pip install -r requirements.txt
 ```
 ## Frontend:
@@ -28,7 +23,7 @@ Download and install https://github.com/coreybutler/nvm-windows<br>
 Then run:
 ```
 nvm install 22
-uvm use 22
+nvm use 22
 cd frontend
 npm install
 ```
