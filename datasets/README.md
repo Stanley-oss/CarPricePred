@@ -10,7 +10,10 @@ _used_cars_processed.csv_ 修改 _used_cars.csv_ 并清洗
 |:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 |品牌|型号|生产时间|车龄|里程数|燃料类型|引擎排量|最大马力|变速类型|座椅数|价格|
 
-品牌一共包含$73$个不同的类别
+品牌一共包含$73$个不同的类别: 
+
+Acura | Alfa | Ambassador | Ashok | Aston | Audi | Bentley | BMW | Bugatti | Buick | Cadillac | Chevrolet | Chrysler | Daewoo | Datsun | Dodge | Ferrari | FIAT | Force | Ford | Genesis | GMC | Honda | Hummer | Hyundai | INFINITI | Isuzu | Jaguar | Jeep | Karma | Kia | Lamborghini | Land | Land Rover | Lexus | Lincoln | Lotus | Lucid | Mahindra | Maruti | Maruti Suzuki | Maserati | Maybach | Mazda | McLaren | Mercedes-Benz | Mercury | MG | MINI | Mitsubishi | Nissan | Opel | Plymouth | Polestar | Pontiac | Porsche | RAM | Renault | Rivian | Rolls-Royce | Saab | Saturn | Scion | Skoda | smart | Ssangyong | Subaru | Suzuki | Tata | Tesla | Toyota | Volkswagen | Volvo
+
 
 行驶里程数：单位 $km$
 

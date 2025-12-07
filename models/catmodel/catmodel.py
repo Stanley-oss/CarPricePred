@@ -10,8 +10,9 @@ from catboost import CatBoostRegressor, Pool
 from joblib import dump
 from sklearn.model_selection import GroupKFold, KFold
 
-CSV_PATH = "../../datasets/Full_dataset.csv"
-SAVE_DIR = "./model/"
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SAVE_DIR = os.path.join(CURRENT_DIR, "model")
+CSV_PATH = os.path.join(CURRENT_DIR, "../../datasets/Full_dataset.csv")
 TARGET_COL = "Price"
 DATE_COL = "listing_date"
 BRAND_COL = "Brand"

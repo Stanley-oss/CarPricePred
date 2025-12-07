@@ -183,7 +183,7 @@
   "external_ts_blend": {
     "enable": false,
     "blend_weight": 0.5,
-    "file": "./model/external_market_forecast.json"
+    "file": "c:\\Users\\Stanley\\Desktop\\CarPricePred\\models\\catmodel\\model\\external_market_forecast.json"
   },
   "target": "Price",
   "date_col": null,

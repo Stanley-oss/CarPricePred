@@ -10,8 +10,12 @@ import torch.utils.data as data
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
-CSV_PATH = "../../datasets/Full_dataset.csv"
-MODEL_DIR = "./model"
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(CURRENT_DIR, "model")
+CSV_PATH = os.path.join(CURRENT_DIR, "../../datasets/Full_dataset.csv")
+BATCH_SIZE = 64
+LR = 2e-3
+EPOCHS = 100
 
 
 def seed_everything(seed=42):
@@ -132,7 +136,7 @@ class CarDataset(data.Dataset):
 # ==========================================
 # 4. 数据处理策略 (Global Bias + Clean Training)
 # ==========================================
-class CarPricePredictor:
+class ResnetCarPricePredictor:
     def __init__(self, model_dir=MODEL_DIR, csv_path=CSV_PATH):
         self.model_dir = model_dir
         self.csv_path = csv_path
@@ -158,6 +162,12 @@ class CarPricePredictor:
         df = pd.read_csv(file_path)
 
         # 补上缺失值 (并记录中位数用于推理)
+        df["Brand"] = df["Brand"].astype(str).str.strip()
+        df["Fuel Type"] = df["Fuel Type"].astype(str).str.strip()
+        df["Model"] = df["Model"].astype(str).str.strip()
+        df["Transmission"] = df["Transmission"].astype(str).str.strip()
+
+        # 补全缺失值
         df["Max Power"] = pd.to_numeric(df["Max Power"], errors="coerce")
         impute_values = {}
         for col in ["Engine", "Max Power"]:
@@ -177,14 +187,14 @@ class CarPricePredictor:
         le_brand = LabelEncoder()
         df["Brand_ID"] = le_brand.fit_transform(df["Brand"])  # 把品牌转换成编号
         # Brand Bias = Brand Mean - Global Mean
-        brand_map = df.groupby("Brand_ID")["log_price"].mean() - global_mean_log  # 计算每个品牌相对于平均的偏置
+        brand_map = (df.groupby("Brand_ID")["log_price"].mean() - global_mean_log).to_dict()  # 计算每个品牌相对于平均的偏置
         df["bias_brand"] = df["Brand_ID"].map(brand_map)  # 再把算好的偏置加到数据里
 
         le_fuel = LabelEncoder()  # 一样的操作针对燃油类型再来一遍
         df["Fuel_ID"] = le_fuel.fit_transform(df["Fuel Type"])
 
         # Fuel Bias = Fuel Mean - Global Mean
-        fuel_map = df.groupby("Fuel_ID")["log_price"].mean() - global_mean_log
+        fuel_map = (df.groupby("Fuel_ID")["log_price"].mean() - global_mean_log).to_dict()
         df["bias_fuel"] = df["Fuel_ID"].map(fuel_map)
 
         # =======================================================
@@ -273,8 +283,8 @@ class CarPricePredictor:
         preprocessor_pack = {
             "impute_values": impute_values,
             "global_mean_log": global_mean_log,
-            "brand_map": brand_map,
-            "fuel_map": fuel_map,
+            "brand_map": brand_map,  # 现在是 Dict
+            "fuel_map": fuel_map,  # 现在是 Dict
             "le_brand": le_brand,
             "le_fuel": le_fuel,
             "le_model": le_model,
@@ -298,9 +308,6 @@ class CarPricePredictor:
         核心训练逻辑，若模型不存在则重新训练
         """
         seed_everything(42)
-        BATCH_SIZE = 64
-        LR = 2e-3
-        EPOCHS = 100
 
         # 1. 获取数据与预处理器
         (train_dl, test_dl, prep_pack) = self.get_data_strategy(self.csv_path, BATCH_SIZE)
@@ -442,18 +449,17 @@ class CarPricePredictor:
         if self.model is None:
             raise RuntimeError("Model is not initialized. Call initialize() first.")
 
-        # 1. 字段映射 (Dict key -> DataFrame column)
-        # 注意: 传入的 data_dict key 可能是 snake_case, 需要映射到 Dataset 的 Title Case
+        # 1. 构造数据
         row_data = {
-            "Brand": data_dict.get("brand"),
-            "Model": data_dict.get("model"),
+            "Brand": str(data_dict.get("brand")).strip(),  # 只去空格
+            "Model": str(data_dict.get("model")).strip(),
             "Year": data_dict.get("year"),
             "Age": data_dict.get("age"),
             "Kilometer": data_dict.get("milage"),  # 对应 Dataset 的 Kilometer
-            "Fuel Type": data_dict.get("fuel_type"),  # 对应 Dataset 的 Fuel Type
+            "Fuel Type": str(data_dict.get("fuel_type")).strip(),  # 对应 Dataset 的 Fuel Type
             "Engine": data_dict.get("engine"),
             "Max Power": data_dict.get("max_power"),
-            "Transmission": data_dict.get("transmission"),
+            "Transmission": str(data_dict.get("transmission")).strip(),
             "Seats": data_dict.get("seats"),
             # listing_date 暂时未在模型中使用，忽略
         }
@@ -479,16 +485,20 @@ class CarPricePredictor:
 
         # Brand Bias
         try:
-            brand_id = prep["le_brand"].transform(df["Brand"])[0]
+            # transform 返回 numpy array
+            brand_id_numpy = prep["le_brand"].transform(df["Brand"])[0]
+            brand_id = int(brand_id_numpy)
             # 从保存的 Series 中查找 Bias, 找不到则用 0
             brand_bias = prep["brand_map"].get(brand_id, 0.0)
-        except (ValueError, KeyError, IndexError):
+        except (ValueError, KeyError, IndexError) as e:
+            print(f"[Warn] Brand mismatch for '{df['Brand'].iloc[0]}': {e}")
             # 遇到未知品牌或数据错误，降级处理
             brand_bias = 0.0
 
         # Fuel Bias
         try:
-            fuel_id = prep["le_fuel"].transform(df["Fuel Type"])[0]
+            fuel_id_numpy = prep["le_fuel"].transform(df["Fuel Type"])[0]
+            fuel_id = int(fuel_id_numpy)
             fuel_bias = prep["fuel_map"].get(fuel_id, 0.0)
         except (ValueError, KeyError, IndexError):
             fuel_bias = 0.0
@@ -496,12 +506,12 @@ class CarPricePredictor:
         # Model & Trans 编码
         # 简单处理：如果遇到未知 Model，随机指派一个(或者指派众数)，这里取 0
         try:
-            model_id = prep["le_model"].transform(df["Model"])[0]
+            model_id = int(prep["le_model"].transform(df["Model"])[0])
         except (ValueError, KeyError, IndexError):
             model_id = 0
 
         try:
-            trans_id = prep["le_trans"].transform(df["Transmission"])[0]
+            trans_id = int(prep["le_trans"].transform(df["Transmission"])[0])
         except (ValueError, KeyError, IndexError):
             trans_id = 0
 
@@ -519,6 +529,15 @@ class CarPricePredictor:
             # 反归一化
             pred_core_log = prep["scaler_y"].inverse_transform(pred_core_norm.reshape(-1, 1)).flatten()[0]
 
+            # [Debug Print]
+            # 这会让你确信 bias 到底有没有取到
+            print("-" * 30)
+            print("Debug Info:")
+            print(f"Brand: {row_data['Brand']} | Bias: {brand_bias}")
+            print(f"Fuel : {row_data['Fuel Type']} | Bias: {fuel_bias}")
+            print(f"Core Log: {pred_core_log:.4f}")
+            print("-" * 30)
+
             # 加上 Bias
             final_log_pred = pred_core_log + brand_bias + fuel_bias
 
@@ -532,26 +551,28 @@ class CarPricePredictor:
 # 5. 主执行逻辑
 # ==========================================
 if __name__ == "__main__":
-    predictor = CarPricePredictor()
+    predictor = ResnetCarPricePredictor()
 
-    # 初始化
     predictor.initialize()
 
-    sample_data = {
-        "brand": "Acura",
-        "model": "ILX 2.0L w/Premium Package",
-        "year": 2013,
-        "age": 12,
-        "milage": 318649,
+    (train_dl, test_dl, prep_pack) = predictor.get_data_strategy(CSV_PATH, BATCH_SIZE)
+    predictor.evaluate(test_dl)
+
+    payload = {
+        "brand": "Toyota",
+        "model": "Corolla",
+        "year": 2019,
+        "age": 4,
+        "milage": 45000,
         "fuel_type": "Petrol",
-        "engine": 2000,
-        "max_power": 150,
+        "engine": 1798,
+        "max_power": 138,
         "transmission": "Automatic",
         "seats": 5,
     }
 
     try:
-        price = predictor.predict_price(sample_data)
+        price = predictor.predict_price(payload)
         print("\n" + "=" * 40)
         print(f"Predicted Price for Sample: {price:,.2f}")
         print("=" * 40)

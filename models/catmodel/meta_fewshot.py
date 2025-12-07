@@ -88,6 +88,8 @@ class FewShotKnnMeta:
         self._group_counts: dict[str, int] = {}
         self._group_ids: np.ndarray | None = None  # 每行对应的 group_id（brand||model||year）
 
+        self._ensure_loaded()
+
     # ---------- 懒加载全量数据 ----------
 
     def _ensure_loaded(self):

@@ -8,9 +8,9 @@ import pandas as pd
 from joblib import load
 from meta_fewshot import FewShotConfig, FewShotKnnMeta
 
-# 路径
-MODEL_DIR = "./model/"  # 改成你的,模型所在目录
-CSV_PATH = "../../datasets/Full_dataset.csv"
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(CURRENT_DIR, "model")
+CSV_PATH = os.path.join(CURRENT_DIR, "../../datasets/Full_dataset.csv")
 META_PATH = os.path.join(MODEL_DIR, "cqr_meta.json")  # cqr_meta.json 的路径，这是训练阶段导出的 meta 信息
 MODEL_P10 = os.path.join(MODEL_DIR, "catboost_p10.joblib")
 MODEL_P50 = os.path.join(MODEL_DIR, "catboost_p50.joblib")
@@ -42,7 +42,7 @@ def to_number(x):  # 把各种形式的数字（包括字符串、带单位的�
     if isinstance(x, int | float | np.number):
         return float(x)
     s = str(x)
-    m = re.search("[-+]?\d*\.?\d+", s.replace(",", ""))
+    m = re.search(r"[-+]?\d*\.?\d+", s.replace(",", ""))
     return float(m.group(0)) if m else np.nan
 
 
@@ -172,6 +172,7 @@ def hierarchical_qhat_asym(
 
 
 # period_bin
+# 这个 period_bin 会用在 CQR 的分组键里，让“价格波动”在时间轴上有一定的区分度。
 def make_period_bin_from_year_or_date(
     year, listing_date
 ):  # make_period_bin_from_year_or_date 把 year 或者上架日期 listing_date 映射成一个两年一段的区间
@@ -186,9 +187,6 @@ def make_period_bin_from_year_or_date(
         return "Unknown"
     lo = int(y) // 2 * 2
     return f"{lo}-{lo + 1}"  # 优先使用 listing_date，如果解析失败就用 year；再把年份按两年一段划分，形成 "lo-(lo+1)" 的字符串。
-
-
-# 这个 period_bin 会用在 CQR 的分组键里，让“价格波动”在时间轴上有一定的区分度。
 
 
 # 构造一行与训练一致的特征
@@ -376,7 +374,7 @@ def _base_predict_price(d):
     hi_raw = p90_m + qhi * p50_m
 
     # 再做一步“展示截断”：保证最终区间最大 ±6 万
-    lo_show, hi_show, half_raw = clamp_interval_to_60k(p50_m, lo_raw, hi_raw)
+    lo_show, hi_show, _half_raw = clamp_interval_to_60k(p50_m, lo_raw, hi_raw)
 
     # 对外展示用的 WR（基于截断后的区间）
     wr_show = (hi_show - lo_show) / max(1e-6, p50_m)
