@@ -5,7 +5,18 @@
 Create a new environment:
 ```
 python -m venv venv
+```
+Activate the environment:
+Windows:
+```
 .\venv\Scripts\activate
+```
+Linux / macOS:
+```
+source venv/bin/activate
+```
+Install dependencies:
+```
 pip install -r requirements.txt
 ```
 ## Frontend:
