@@ -14,7 +14,7 @@ const theme = createTheme({
       main: '#1976d2', // 深蓝
     },
     secondary: {
-      main: '#9c27b0', // 紫色\
+      main: '#9c27b0', // 紫色
     },
     background: {
       default: '#f4f6f8',

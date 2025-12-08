@@ -21,7 +21,7 @@ const PredictionForm: React.FC<PredictionFormProps> = ({ onSubmit, loading }) =>
     brand: 'Toyota',
     model: 'Corolla',
     year: 2019,
-    age: 4,
+    age: 6,
     milage: 45000,
     fuel_type: 'Petrol',
     engine: 1800,
@@ -30,8 +30,17 @@ const PredictionForm: React.FC<PredictionFormProps> = ({ onSubmit, loading }) =>
     seats: 5,
   });
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    const updatedData = { ...formData, [name]: value };
+    if (name === 'year' && value) {
+      updatedData.age = 2025 - Number(value);
+    } 
+    else if (name === 'age' && value) {
+      updatedData.year = 2025 - Number(value);
+    }
+
+    setFormData(updatedData);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -62,7 +71,7 @@ const PredictionForm: React.FC<PredictionFormProps> = ({ onSubmit, loading }) =>
           <Grid size={{ xs: 12, sm: 6 }}>
             <TextField 
               fullWidth label="Model" name="model" 
-              value={formData.model} onChange={handleChange} required 
+              value={formData.model} onChange={handleChange} 
             />
           </Grid>
 
