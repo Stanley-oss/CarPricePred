@@ -4,7 +4,7 @@ from models.catmodel.predict_price import predict_price  # 复用你现成的预
 
 
 def _ask(prompt, cast=str, allow_empty=True):
-    """简单的输入助手：支持留空、自动类型转换"""
+    """简单输入助手：支持留空、自动类型转换"""
     while True:
         s = input(prompt).strip()
         if s == "" and allow_empty:
@@ -44,7 +44,6 @@ def interactive_loop():
     print("提示：直接回车 = 未知/默认\n")
 
     while True:
-        # 基本信息
         brand = _ask("品牌（如 Toyota）：")
         model = _ask("型号（如 Corolla）：")
 
@@ -56,14 +55,12 @@ def interactive_loop():
         max_power = _ask("最大马力（bhp，如 138）：", float)
         seats = _ask("座椅数（如 5）：", float)
 
-        # 枚举字段
         fuel_raw = _ask("燃料类型（Petrol/Diesel/Other，可写中文）：")
         fuel_type = _norm_fuel(fuel_raw)
 
         gear_raw = _ask("变速箱（Automatic/Manual，可写中文/AT/MT）：")
         transmission = _norm_gear(gear_raw)
 
-        # 可选：挂牌日期，用于 period，更精准的市场系数
         date_raw = _ask("挂牌日期（YYYY-MM-DD，可留空，用年份代替）：")
         listing_date = None
         if date_raw:
@@ -87,10 +84,8 @@ def interactive_loop():
             "listing_date": listing_date,
         }
 
-        # 调用你的模型
         out = predict_price(payload)
 
-        # 展示结果
         print("\n--- 预测结果 ---")
         print(f"点预测价格 P50：{out['p50']:,.2f}")
         print(f"价格区间     ：[{out['lo']:,.2f} , {out['hi']:,.2f}]")
@@ -98,11 +93,13 @@ def interactive_loop():
         print(f"分组键       ：{out['group_key']}")
         print(f"period / bin ：{out['period']} / {out['period_bin']}")
         print(f"市场系数 M_t ：{out['market_multiplier']:.4f}")
-        # 可选：提示一下原始区间有多宽
+        print(f"品牌/车型系数：{out['brand_model_coef']:.3f}")
         if "wr_raw" in out and out["wr_raw"] > out["wr"]:
-            print(f"(内部原始区间 WR_raw≈{out['wr_raw']:.3f}，已按 ±6万 截断展示)")
+            print(
+                f"(内部原始区间 WR_raw≈{out['wr_raw']:.3f}，"
+                f"已按 ±6 万 截断展示)"
+            )
 
-        # 是否继续
         cont = input("\n继续预测下一辆吗？(Y/n)：").strip().lower()
         if cont in ["n", "no", "q", "quit", "exit"]:
             break

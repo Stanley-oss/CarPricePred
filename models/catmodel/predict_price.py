@@ -7,56 +7,46 @@ import numpy as np
 import pandas as pd
 from joblib import load
 
-from models.catmodel.meta_fewshot import FewShotConfig, FewShotKnnMeta
-
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(CURRENT_DIR, "model")
 CSV_PATH = os.path.join(CURRENT_DIR, "../../datasets/Full_dataset.csv")
 META_PATH = os.path.join(MODEL_DIR, "cqr_meta.json")  # cqr_meta.json 的路径，这是训练阶段导出的 meta 信息
 MODEL_P10 = os.path.join(MODEL_DIR, "catboost_p10.joblib")
 MODEL_P50 = os.path.join(MODEL_DIR, "catboost_p50.joblib")
-MODEL_P90 = os.path.join(MODEL_DIR, "catboost_p90.joblib")  # 分别对应 10%、50%、90 分位的 CatBoost 模型文件。
-MAX_HALF_WIDTH = 60000.0  # 你定死的展示半宽：6 万
+MODEL_P90 = os.path.join(MODEL_DIR, "catboost_p90.joblib")
+
+MAX_HALF_WIDTH = 60000.0  # 最终展示区间的半宽：6 万
 
 
+# ===== 一些小工具 =====
 def clamp_interval_to_60k(p50, lo_raw, hi_raw, max_half=MAX_HALF_WIDTH):
     """
-    分别限制上下界的偏离程度，保留 CQR 的非对称性
+    把原始区间 (lo_raw, hi_raw) 以 p50 为中心截断到最多 ±max_half。
+    返回截断后的 (lo_show, hi_show) 以及原始半宽 half_raw。
     """
-    p50 = float(p50)
+    mid = float(p50)
     lo_raw = float(lo_raw)
     hi_raw = float(hi_raw)
 
-    # 1. 计算原始偏离量 (必须保证非负，虽然理论上 lo <= p50 <= hi，但防万一)
-    diff_lo = max(0.0, p50 - lo_raw)
-    diff_hi = max(0.0, hi_raw - p50)
+    half_raw = max(mid - lo_raw, hi_raw - mid)
+    half_new = min(half_raw, max_half)
 
-    # 2. 分别截断
-    new_diff_lo = min(diff_lo, max_half)
-    new_diff_hi = min(diff_hi, max_half)
-
-    # 3. 重新计算边界
-    lo_show = p50 - new_diff_lo
-    hi_show = p50 + new_diff_hi
-
-    # 记录原始最大半宽用于统计
-    half_raw = max(diff_lo, diff_hi)
-
+    lo_show = mid - half_new
+    hi_show = mid + half_new
     return lo_show, hi_show, half_raw
 
 
-# 小工具
-def to_number(x):  # 把各种形式的数字（包括字符串、带单位的字符串）转成 float，失败就返回 NaN。
+def to_number(x):
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return np.nan
-    if isinstance(x, int | float | np.number):
+    if isinstance(x, (int, float, np.number)):
         return float(x)
     s = str(x)
     m = re.search(r"[-+]?\d*\.?\d+", s.replace(",", ""))
     return float(m.group(0)) if m else np.nan
 
 
-def safe_log1p(v):  # 对里程等非负数做 log1p 变换，并且避免负数，主要是为了平滑长尾分布。
+def safe_log1p(v):
     v = 0 if v is None else v
     return np.log1p(max(0.0, float(v)))
 
@@ -69,7 +59,7 @@ def age_bin(a):
         return "age:0-3"
     if a < 8:
         return "age:3-8"
-    return "age:8+"  # 这个离散化的 age_bin 后面会参与分组校准。
+    return "age:8+"
 
 
 def standardize_fuel(x):
@@ -78,7 +68,7 @@ def standardize_fuel(x):
         return "Petrol"
     if s in ["diesel", "d", "柴油"]:
         return "Diesel"
-    return "Other"  # 分别把燃料类型和变速箱类型标准化。
+    return "Other"
 
 
 def standardize_gear(x):
@@ -90,77 +80,60 @@ def standardize_gear(x):
     return "Unknown"
 
 
-def _get_te_value(te_cfg, key):
-    """
-    从 target_encoding 的 global_map 里取一个编码值（log_price 的中位数），
-    找不到就用全局中位数兜底。
-    """
-    if not te_cfg:
-        return None
-    gmap = te_cfg.get("global_map", {})
-    if key in gmap:
-        return float(gmap[key])
-    vals = list(gmap.values())
-    if not vals:
-        return None
-    agg = te_cfg.get("agg_func", "median")
-    if agg == "median":
-        return float(np.median(vals))
-    else:
-        return float(np.mean(vals))
+# ===== 载入模型 & meta =====
+_meta = json.load(open(META_PATH, encoding="utf-8"))
 
-
-# 载入模型与meta
-# 特征类配置
-_meta = json.load(open(META_PATH, encoding="utf-8"))  # 用 json.load 把 META_PATH 读进来，得到一个 _meta 字典。
-brand_te = _meta.get("Brand")
-brand_model_te = _meta.get("BrandModel")
-_cols = _meta["columns"]  # _cols 是训练时用到的全部特征列的顺序；
+_cols = _meta["columns"]
 _cat_cols = _meta.get("categorical_cols", [])
-_cat_idx = _meta.get("categorical_indices", [])  # _cat_cols / _cat_idx 标记了哪些是类别特征。
+_cat_idx = _meta.get("categorical_indices", [])
 alpha = float(_meta.get("alpha", 0.20))
-# 推理侧构造特征时，必须完全对齐 _cols，否则模型输入就会错位。
-# 市场指数相关
+
 market_info = _meta["market_index"]
 M_t_smooth = market_info.get("M_t_smooth", {})
-M_t_raw = market_info.get("M_t_raw", {})  # 表示在不同时期、二手车价格整体的市场指数
+M_t_raw = market_info.get("M_t_raw", {})
 ewma_alpha = market_info.get("ewma_alpha", 0.25)
-# 可以理解为：“某一年的整体价格水平是基准年的多少倍”。
-# CQR（Conformal Quantile Regression）校准信息
+
+# CQR 参数（相对误差模式）
 cqr_info = _meta["cqr_after_market"]
-cqr_type = cqr_info.get("type", "asymmetric")
+cqr_type = cqr_info.get("type", "asymmetric_ratio")
 q_lo_global = float(cqr_info.get("q_lo_global", 0.0))
-q_hi_global = float(
-    cqr_info.get("q_hi_global", 0.0)
-)  # q_lo_global / q_hi_global 是全局回退值，当某个分组找不到具体统计时，就用全局的。
+q_hi_global = float(cqr_info.get("q_hi_global", 0.0))
 q_lo_groups = cqr_info.get("q_lo_groups", {})
-q_hi_groups = cqr_info.get(
-    "q_hi_groups", {}
-)  # q_lo_groups 和 q_hi_groups 对应每个 group 的“不对称剩余量”，用来修正下界和上界；
-group_key_def = cqr_info.get("group_key_def", "age_bin|fuel_type|transmission|period_bin")
-# 外部时间序列融合（可选）
+q_hi_groups = cqr_info.get("q_hi_groups", {})
+group_key_def = cqr_info.get(
+    "group_key_def", "age_bin|fuel_type|transmission|period_bin"
+)
+
+# 品牌 / 车型 校准表
+bm_cal = _meta.get("brand_model_calibration", {})
+bm_levels = bm_cal.get("levels", {}) if bm_cal else {}
+BM_AGE_COEF = bm_levels.get("brand_model_age", {})
+BM_COEF = bm_levels.get("brand_model", {})
+BRAND_COEF = bm_levels.get("brand", {})
+
+# 外部时间序列融合（可选，目前默认关掉）
 ext_cfg = _meta.get("external_ts_blend", {"enable": False})
 EXT_ENABLE = bool(ext_cfg.get("enable", False))
 EXT_WEIGHT = float(ext_cfg.get("blend_weight", 0.5))
 EXT_FILE = ext_cfg.get("file", "")
-# 这一块是预留：如果有外部来源的市场指数数据（比如其它平台），可以和内部指数做加权融合；默认可以关闭。
+
 m_p10 = load(MODEL_P10)
 m_p50 = load(MODEL_P50)
 m_p90 = load(MODEL_P90)
 
 
-# 分组回退（逐级）
-def hierarchical_qhat_asym(
-    key_full,
-):  # hierarchical_qhat_asym(key_full) 是 CQR 的一个辅助函数。key_full 的格式是：age_bin | fuel_type | transmission | period_bin
+# ===== 分组 CQR 的逐级回退 =====
+def hierarchical_qhat_asym(key_full):
+    """
+    从 q_lo_groups/q_hi_groups 里，按 key_full 逐级回退找一对 (q_lo, q_hi)。
+    这里保持你原来的逻辑：先用 full key；不行就合并 period_bin / age_bin。
+    """
     if key_full in q_lo_groups and key_full in q_hi_groups:
-        return float(q_lo_groups[key_full]), float(
-            q_hi_groups[key_full]
-        )  # 优先尝试用完整分组的 (q_lo_groups[key_full], q_hi_groups[key_full])；
+        return float(q_lo_groups[key_full]), float(q_hi_groups[key_full])
 
     parts = key_full.split("|")
-    # 去掉 period_bin
     if len(parts) == 4:
+        # 去掉 period_bin，只看前三段
         k3_prefix = "|".join(parts[:3])
         cand = [gk for gk in q_lo_groups.keys() if gk.startswith(k3_prefix + "|")]
         if len(cand) > 0:
@@ -168,7 +141,8 @@ def hierarchical_qhat_asym(
             hi_vals = [q_hi_groups[c] for c in cand if c in q_hi_groups]
             if len(lo_vals) > 0 and len(hi_vals) > 0:
                 return float(np.median(lo_vals)), float(np.median(hi_vals))
-        # 再去掉 age_bin -> 仅 fuel|gear
+
+        # 再去掉 age_bin，只看 fuel|gear
         k2 = "|".join(parts[1:3])
         cand2 = [gk for gk in q_lo_groups.keys() if ("|" + k2) in gk]
         if len(cand2) > 0:
@@ -176,16 +150,11 @@ def hierarchical_qhat_asym(
             hi_vals = [q_hi_groups[c] for c in cand2 if c in q_hi_groups]
             if len(lo_vals) > 0 and len(hi_vals) > 0:
                 return float(np.median(lo_vals)), float(np.median(hi_vals))
-    # 如果没有，就分两步逐级回退：先去掉 period_bin，只固定前三项，看同样 (age_bin, fuel, gear) 下所有 period 的统计；
-    # 再去掉 age_bin，只按 (fuel, gear) 聚合，取这些子分组的中位数作为代表；
-    return q_lo_global, q_hi_global  # 如果最后还是没有，就退回全局的 q_lo_global, q_hi_global。
+
+    return q_lo_global, q_hi_global
 
 
-# period_bin
-# 这个 period_bin 会用在 CQR 的分组键里，让“价格波动”在时间轴上有一定的区分度。
-def make_period_bin_from_year_or_date(
-    year, listing_date
-):  # make_period_bin_from_year_or_date 把 year 或者上架日期 listing_date 映射成一个两年一段的区间
+def make_period_bin_from_year_or_date(year, listing_date):
     if listing_date:
         try:
             y = pd.to_datetime(listing_date).year
@@ -196,81 +165,105 @@ def make_period_bin_from_year_or_date(
     if y is None or (isinstance(y, float) and np.isnan(y)):
         return "Unknown"
     lo = int(y) // 2 * 2
-    return f"{lo}-{lo + 1}"  # 优先使用 listing_date，如果解析失败就用 year；再把年份按两年一段划分，形成 "lo-(lo+1)" 的字符串。
+    return f"{lo}-{lo+1}"
 
 
-# 构造一行与训练一致的特征
-def build_row(d):  # build_row(d) 是这份代码的第一大核心函数。它负责把一条样本变成一行、与训练阶段完全对齐的特征向量。
+# ===== 品牌 / 车型 校准倍率 =====
+def get_brand_model_multiplier_for_predict(brand, model, age_val):
+    """
+    预测侧：给定 brand / model / age，按层级从校准表里取一个倍率。
+    """
+    ab = age_bin(age_val)
+    b = str(brand) if brand is not None else "Unknown"
+    m = str(model) if model is not None else "Unknown"
+
+    k1 = f"{b}|{m}|{ab}"
+    if k1 in BM_AGE_COEF:
+        return float(BM_AGE_COEF[k1])
+
+    k2 = f"{b}|{m}"
+    if k2 in BM_COEF:
+        return float(BM_COEF[k2])
+
+    if b in BRAND_COEF:
+        return float(BRAND_COEF[b])
+
+    return 1.0
+
+
+# ===== 构造一行特征 =====
+def build_row(d):
     brand = d.get("brand")
     model = d.get("model")
-    year = to_number(d.get("year"))  # 解析基础字段 & 补全 Age
+
+    year = to_number(d.get("year"))
     age = to_number(d.get("age"))
     if age is None or (isinstance(age, float) and np.isnan(age)):
         if year is not None and not np.isnan(year):
             age = datetime.now().year - year
         else:
             age = np.nan
+
     milage = to_number(d.get("milage"))
     engine = to_number(d.get("engine"))
     max_power = to_number(d.get("max_power"))
     seats = to_number(d.get("seats"))
+
     fuel_type = standardize_fuel(d.get("fuel_type"))
-    gear = standardize_gear(d.get("transmission"))  # 标准化类别字段
+    gear = standardize_gear(d.get("transmission"))
     listing_date = d.get("listing_date", None)
 
-    period = str(int(year)) if year == year and year is not None else "Unknown"
-    period_bin = make_period_bin_from_year_or_date(year, listing_date)  # 生成 period 和 period_bin 用于后续分组和市场指数。
-    # 构造衍生特征
+    period = (
+        str(int(year)) if (year is not None and not np.isnan(year)) else "Unknown"
+    )
+    period_bin = make_period_bin_from_year_or_date(year, listing_date)
+
     log1p_mileage = safe_log1p(milage)
-    age_safe = 0.25 if (age is None or age == 0 or np.isnan(age)) else float(age)
+    age_safe = (
+        0.25
+        if (age is None or age == 0 or (isinstance(age, float) and np.isnan(age)))
+        else float(age)
+    )
+
     avg_km_per_year = milage if milage == milage else np.nan
-    avg_km_per_year = (avg_km_per_year / age_safe) if avg_km_per_year == avg_km_per_year else np.nan
+    avg_km_per_year = (
+        avg_km_per_year / age_safe
+        if (avg_km_per_year == avg_km_per_year)
+        else np.nan
+    )
+
     is_auto = 1 if gear == "Automatic" else 0
     hp_x_auto = (max_power if max_power == max_power else 0.0) * is_auto
     hp_div_avgkm = (
-        (max_power / avg_km_per_year) if (max_power == max_power and avg_km_per_year and avg_km_per_year > 0) else np.nan
+        max_power / avg_km_per_year
+        if (max_power == max_power and avg_km_per_year and avg_km_per_year > 0)
+        else np.nan
     )
-    power_per_cc = (max_power / engine) if (max_power == max_power and engine and engine > 0) else np.nan
-    cc_per_seat = (engine / seats) if (engine == engine and seats and seats > 0) else np.nan
-    # log1p_mileage：对里程做对数平滑；
-    # avg_km_per_year：平均每年行驶里程，等于 milage / age_safe；
-    # is_auto：是否自动档；
-    # hp_x_auto：最大马力 × 是否自动档，让自动挡的马力体现得更明显；
-    # hp_div_avgkm：马力 / 平均年行驶里程，粗略反映车的“动力密度”；
-    # power_per_cc：马力 / 排量；
-    # cc_per_seat：排量 / 座位数。
-    # 对齐训练时的列名和缺失标记
-    row = {}
-    # --- 品牌 / 车型 溢价特征（如果训练时有存）---
-    if brand_te:
-        col_name = brand_te.get("col_name")
-        if col_name in _cols:
-            val = _get_te_value(brand_te, brand)
-            row[col_name] = float(val) if val is not None else 0.0
+    power_per_cc = (
+        max_power / engine
+        if (max_power == max_power and engine and engine > 0)
+        else np.nan
+    )
+    cc_per_seat = (
+        engine / seats
+        if (engine == engine and seats and seats > 0)
+        else np.nan
+    )
 
-    if brand_model_te:
-        col_name = brand_model_te.get("col_name")
-        if col_name in _cols:
-            bm_key = f"{brand}§{model}"
-            val = _get_te_value(brand_model_te, bm_key)
-            row[col_name] = float(val) if val is not None else 0.0
+    row = {}
 
     def put_num(name, val):
         row[name] = float(val) if (val is not None and val == val) else 0.0
         row[name + "_missing"] = 0 if (val is not None and val == val) else 1
-        # 构造一个 row 字典，然后通过一个 put_num 小函数来填值：row[name] = 数值本身或 0.0；
-        # 额外增加一个 row[name + "_missing"] 标志，表示这个字段当时是不是缺失
 
-    # 同时，对于一些预测侧得不到的频数特征，我们统一把它们的数值设为 NaN，missing 标志设为 1
-    # 相当于告诉模型“这个频数在预测时没有先验”。
-    # 与训练列对齐：能放的都放，没在训练列中的忽略
+    # 数值特征 + 缺失标记
     for name, val in [
-        ("year", year),
-        ("age", age),
-        ("milage", milage),
-        ("max_power", max_power),
-        ("engine", engine),
-        ("seats", seats),
+        ("Year", year),
+        ("Age", age),
+        ("Kilometer", milage),
+        ("Max Power", max_power),
+        ("Engine", engine),
+        ("Seats", seats),
         ("car_age", age),
         ("log1p_mileage", log1p_mileage),
         ("avg_km_per_year", avg_km_per_year),
@@ -278,7 +271,7 @@ def build_row(d):  # build_row(d) 是这份代码的第一大核心函数。它�
         ("hp_div_avgkm", hp_div_avgkm),
         ("power_per_cc", power_per_cc),
         ("cc_per_seat", cc_per_seat),
-        # 频数特征在预测侧没有先验值，设为0并标记缺失
+        # 频数特征在预测侧无真实值，设为 0 + missing=1
         ("brand_count", np.nan),
         ("model_count", np.nan),
         ("brand_model_count", np.nan),
@@ -286,14 +279,15 @@ def build_row(d):  # build_row(d) 是这份代码的第一大核心函数。它�
         if name in _cols or (name + "_missing") in _cols:
             put_num(name, val)
 
-    if "brand" in _cols:
-        row["brand"] = str(brand) if brand is not None else "Unknown"
-    if "model" in _cols:
-        row["model"] = str(model) if model is not None else "Unknown"
-    if "transmission" in _cols:
-        row["transmission"] = gear
-    if "fuel_type" in _cols:
-        row["fuel_type"] = fuel_type
+    # 类别特征
+    if "Brand" in _cols:
+        row["Brand"] = str(brand) if brand is not None else "Unknown"
+    if "Model" in _cols:
+        row["Model"] = str(model) if model is not None else "Unknown"
+    if "Transmission" in _cols:
+        row["Transmission"] = gear
+    if "Fuel Type" in _cols:
+        row["Fuel Type"] = fuel_type
     if "period" in _cols:
         row["period"] = period
     if "period_bin" in _cols:
@@ -308,15 +302,13 @@ def build_row(d):  # build_row(d) 是这份代码的第一大核心函数。它�
                 final.append(1)
             else:
                 final.append("Unknown" if c in _cat_cols else 0.0)
-                # 如果当前列名在 row 里，就用对应的值；如果不在：若列名以 _missing 结尾，填 1；
-                # 若是类别列，填 "Unknown"；否则填数值 0.0。
 
     X = pd.DataFrame([final], columns=_cols)
-    return X, period, period_bin, age
+    return X, period, period_bin, age, brand, model
 
 
-# 市场系数（含外部序列融合）
-def get_market_multiplier(period):  # get_market_multiplier(period) 负责根据 period 这个时间段，返回一个市场指数 M。
+# ===== 市场系数（含外部融合）=====
+def get_market_multiplier(period):
     if period in M_t_smooth:
         m_internal = float(M_t_smooth[period])
     elif period in M_t_raw:
@@ -324,81 +316,71 @@ def get_market_multiplier(period):  # get_market_multiplier(period) 负责根据
     else:
         m_internal = 1.0
 
-    # 可选外部融合
+    # 可选：外部时序融合（目前默认关闭）
     if EXT_ENABLE and EXT_FILE and os.path.exists(EXT_FILE):
         try:
             ext = json.load(open(EXT_FILE, encoding="utf-8"))
             m_ext = float(ext.get("M_t", {}).get(period, m_internal))
             w = np.clip(EXT_WEIGHT, 0.0, 1.0)
-            return (m_internal ** (1 - w)) * (m_ext**w)
+            return (m_internal ** (1 - w)) * (m_ext ** w)
         except Exception:
             pass
     return m_internal
 
 
-# ==== Few-shot 元学习 / 迁移模块 ====
-# 注意把 csv_path 改成你自己 Full_dataset.csv 的实际路径
-_FEWSHOT_CFG = FewShotConfig(  # few-shot 的配置和初始化
-    csv_path=CSV_PATH,  # ← 这里改成和 newcat.py 里用的一样，注意这里需要更改！！！
-    min_group_size=30,  # 认为样本>=30 就不需要 few-shot 调整
-    max_support_size=200,  # 支持集最多取 200 条
-    k_neighbors=50,  # KNN 取 50 个邻居
-    new_car_max_age=3.0,  # 车龄<=3 年大致认为是“新车”
-)
+# ===== 对外预测接口 =====
+def predict_price(d):
+    """
+    d 是一个 dict，键可以是：
+    brand, model, year, age, milage,
+    fuel_type, engine, max_power, transmission, seats,
+    listing_date(可选，YYYY-MM-DD)。
+    """
+    X, period, period_bin, age_val, brand, model = build_row(d)
 
-_FEWSHOT_ADAPTER = FewShotKnnMeta(_FEWSHOT_CFG)
-
-
-def _base_predict_price(d):
-    X, period, period_bin, age_val = build_row(d)
-
-    # 模型输出 log(price)
+    # CatBoost 模型输出 log(price)
     p10_log = m_p10.predict(X)
     p50_log = m_p50.predict(X)
     p90_log = m_p90.predict(X)
 
-    # 还原为价格
     p10 = float(np.exp(np.asarray(p10_log).item()))
     p50 = float(np.exp(np.asarray(p50_log).item()))
     p90 = float(np.exp(np.asarray(p90_log).item()))
 
-    # 物理约束：确保 p10 <= p50 <= p90 (CatBoost Quantile 不保证这一点)
-    p10 = min(p10, p50)
-    p90 = max(p90, p50)
-
-    # 市场系数
+    # 时间市场系数
     M = get_market_multiplier(period)
     p10_m, p50_m, p90_m = p10 * M, p50 * M, p90 * M
 
-    # 构造 CQR 分组键
+    # Brand / Model 校准系数
+    bm_coef = get_brand_model_multiplier_for_predict(brand, model, age_val)
+    p10_mb, p50_mb, p90_mb = p10_m * bm_coef, p50_m * bm_coef, p90_m * bm_coef
+
+    # CQR 分组 key
     akey = age_bin(age_val)
     fuel = standardize_fuel(d.get("fuel_type"))
     gear = standardize_gear(d.get("transmission"))
     key_full = f"{akey}|{fuel}|{gear}|{period_bin}"
 
-    # 非对称 CQR 逐级回退 -> 得到的是绝对金额残差 (Rupees)
-    qlo, qhi = hierarchical_qhat_asym(key_full)
+    # 逐级回退拿相对误差 q_lo_ratio / q_hi_ratio
+    qlo_ratio, qhi_ratio = hierarchical_qhat_asym(key_full)
 
-    # === 核心修复：直接加减绝对值，不要乘 p50 ===
-    lo_raw = max(0.0, p10_m - qlo)
-    hi_raw = p90_m + qhi
+    # 相对误差 CQR：先算“原始区间”
+    lo_raw = max(0.0, p10_mb - qlo_ratio * p50_mb)
+    hi_raw = p90_mb + qhi_ratio * p50_mb
 
-    # 再次物理约束
-    lo_raw = min(lo_raw, p50_m)
-    hi_raw = max(hi_raw, p50_m)
+    # 再做“展示截断”：最大只显示 ±6 万
+    lo_show, hi_show, half_raw = clamp_interval_to_60k(p50_mb, lo_raw, hi_raw)
 
-    # 展示截断 (保留非对称性)
-    lo_show, hi_show, _half_raw = clamp_interval_to_60k(p50_m, lo_raw, hi_raw)
-
-    # 计算 WR
-    wr_show = (hi_show - lo_show) / max(1e-6, p50_m)
-    wr_raw = (hi_raw - lo_raw) / max(1e-6, p50_m)
+    wr_show = (hi_show - lo_show) / max(1e-6, p50_mb)
+    wr_raw = (hi_raw - lo_raw) / max(1e-6, p50_mb)
 
     return {
-        "p50": float(p50_m),
+        "p50": float(p50_mb),
+        # 给前端展示的区间
         "lo": float(lo_show),
         "hi": float(hi_show),
         "wr": float(wr_show),
+        # 内部真实区间（方便调试）
         "lo_raw": float(lo_raw),
         "hi_raw": float(hi_raw),
         "wr_raw": float(wr_raw),
@@ -406,23 +388,11 @@ def _base_predict_price(d):
         "period": period,
         "period_bin": period_bin,
         "market_multiplier": float(M),
+        "brand_model_coef": float(bm_coef),
     }
 
 
-def predict_price(d):
-    """
-    带 few-shot 迁移学习的最终预测函数：
-
-    1. 先调用 _base_predict_price(d) 做 CatBoost + 市场系数 + CQR；
-    2. 再根据训练集中 (brand, model, year) 的样本量，自动对“小样本新车”做 KNN few-shot 迁移；
-    3. 对于样本已经很多的老车款，元学习模块自动不做调整。
-    """
-    base = _base_predict_price(d)
-    out = _FEWSHOT_ADAPTER.maybe_adapt(d, base)
-    return out
-
-
-# demo
+# 简单自测
 if __name__ == "__main__":
     demo = {
         "brand": "Toyota",
