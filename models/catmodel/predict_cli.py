@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from models.catmodel.predict_price import predict_price  # 复用你现成的预测函数
+from predict_price import predict_price  # 复用你现成的预测函数
 
 
 def _ask(prompt, cast=str, allow_empty=True):
