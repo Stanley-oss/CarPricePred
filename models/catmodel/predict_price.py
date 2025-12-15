@@ -7,23 +7,22 @@ import numpy as np
 import pandas as pd
 from joblib import load
 
+# 引入元学习模块
+from meta_fewshot import FewShotConfig, FewShotKnnMeta
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(CURRENT_DIR, "model")
 CSV_PATH = os.path.join(CURRENT_DIR, "../../datasets/Full_dataset.csv")
-META_PATH = os.path.join(MODEL_DIR, "cqr_meta.json")  # cqr_meta.json 的路径，这是训练阶段导出的 meta 信息
+META_PATH = os.path.join(MODEL_DIR, "cqr_meta.json")
 MODEL_P10 = os.path.join(MODEL_DIR, "catboost_p10.joblib")
 MODEL_P50 = os.path.join(MODEL_DIR, "catboost_p50.joblib")
 MODEL_P90 = os.path.join(MODEL_DIR, "catboost_p90.joblib")
 
-MAX_HALF_WIDTH = 60000.0  # 最终展示区间的半宽：6 万
+MAX_HALF_WIDTH = 60000.0
 
 
-# ===== 一些小工具 =====
+# ===== 工具函数 =====
 def clamp_interval_to_60k(p50, lo_raw, hi_raw, max_half=MAX_HALF_WIDTH):
-    """
-    把原始区间 (lo_raw, hi_raw) 以 p50 为中心截断到最多 ±max_half。
-    返回截断后的 (lo_show, hi_show) 以及原始半宽 half_raw。
-    """
     mid = float(p50)
     lo_raw = float(lo_raw)
     hi_raw = float(hi_raw)
@@ -80,7 +79,7 @@ def standardize_gear(x):
     return "Unknown"
 
 
-# ===== 载入模型 & meta =====
+# ===== 载入模型 & Meta =====
 _meta = json.load(open(META_PATH, encoding="utf-8"))
 
 _cols = _meta["columns"]
@@ -93,7 +92,6 @@ M_t_smooth = market_info.get("M_t_smooth", {})
 M_t_raw = market_info.get("M_t_raw", {})
 ewma_alpha = market_info.get("ewma_alpha", 0.25)
 
-# CQR 参数（相对误差模式）
 cqr_info = _meta["cqr_after_market"]
 cqr_type = cqr_info.get("type", "asymmetric_ratio")
 q_lo_global = float(cqr_info.get("q_lo_global", 0.0))
@@ -111,29 +109,45 @@ BM_AGE_COEF = bm_levels.get("brand_model_age", {})
 BM_COEF = bm_levels.get("brand_model", {})
 BRAND_COEF = bm_levels.get("brand", {})
 
-# 外部时间序列融合（可选，目前默认关掉）
+# 外部时间序列融合
 ext_cfg = _meta.get("external_ts_blend", {"enable": False})
 EXT_ENABLE = bool(ext_cfg.get("enable", False))
 EXT_WEIGHT = float(ext_cfg.get("blend_weight", 0.5))
 EXT_FILE = ext_cfg.get("file", "")
 
+# Few-shot / Meta Learning 配置
+fewshot_cfg_meta = _meta.get("fewshot_cfg", {})
+fewshot_feature_weights = _meta.get("fewshot_feature_weights", {})
+
 m_p10 = load(MODEL_P10)
 m_p50 = load(MODEL_P50)
 m_p90 = load(MODEL_P90)
 
+# ===== 初始化 Meta Adapter =====
+_FEWSHOT_CFG = FewShotConfig(
+    csv_path=fewshot_cfg_meta.get("csv_path", CSV_PATH),
+    min_group_size=int(fewshot_cfg_meta.get("min_group_size", 30)),
+    max_support_size=int(fewshot_cfg_meta.get("max_support_size", 200)),
+    k_neighbors=int(fewshot_cfg_meta.get("k_neighbors", 50)),
+    new_car_max_age=float(fewshot_cfg_meta.get("new_car_max_age", 3.0)),
+    iqr_to_width_factor=float(fewshot_cfg_meta.get("iqr_to_width_factor", 1.8)),
+    min_uncertainty_scale=float(fewshot_cfg_meta.get("min_uncertainty_scale", 0.7)),
+    max_uncertainty_scale=float(fewshot_cfg_meta.get("max_uncertainty_scale", 1.6)),
+)
 
-# ===== 分组 CQR 的逐级回退 =====
+_FEWSHOT_ADAPTER = FewShotKnnMeta(
+    _FEWSHOT_CFG,
+    feature_weights=fewshot_feature_weights,
+)
+
+
+# ===== 逻辑实现 =====
 def hierarchical_qhat_asym(key_full):
-    """
-    从 q_lo_groups/q_hi_groups 里，按 key_full 逐级回退找一对 (q_lo, q_hi)。
-    这里保持你原来的逻辑：先用 full key；不行就合并 period_bin / age_bin。
-    """
     if key_full in q_lo_groups and key_full in q_hi_groups:
         return float(q_lo_groups[key_full]), float(q_hi_groups[key_full])
 
     parts = key_full.split("|")
     if len(parts) == 4:
-        # 去掉 period_bin，只看前三段
         k3_prefix = "|".join(parts[:3])
         cand = [gk for gk in q_lo_groups.keys() if gk.startswith(k3_prefix + "|")]
         if len(cand) > 0:
@@ -142,7 +156,6 @@ def hierarchical_qhat_asym(key_full):
             if len(lo_vals) > 0 and len(hi_vals) > 0:
                 return float(np.median(lo_vals)), float(np.median(hi_vals))
 
-        # 再去掉 age_bin，只看 fuel|gear
         k2 = "|".join(parts[1:3])
         cand2 = [gk for gk in q_lo_groups.keys() if ("|" + k2) in gk]
         if len(cand2) > 0:
@@ -168,11 +181,7 @@ def make_period_bin_from_year_or_date(year, listing_date):
     return f"{lo}-{lo+1}"
 
 
-# ===== 品牌 / 车型 校准倍率 =====
 def get_brand_model_multiplier_for_predict(brand, model, age_val):
-    """
-    预测侧：给定 brand / model / age，按层级从校准表里取一个倍率。
-    """
     ab = age_bin(age_val)
     b = str(brand) if brand is not None else "Unknown"
     m = str(model) if model is not None else "Unknown"
@@ -191,7 +200,6 @@ def get_brand_model_multiplier_for_predict(brand, model, age_val):
     return 1.0
 
 
-# ===== 构造一行特征 =====
 def build_row(d):
     brand = d.get("brand")
     model = d.get("model")
@@ -256,42 +264,22 @@ def build_row(d):
         row[name] = float(val) if (val is not None and val == val) else 0.0
         row[name + "_missing"] = 0 if (val is not None and val == val) else 1
 
-    # 数值特征 + 缺失标记
     for name, val in [
-        ("Year", year),
-        ("Age", age),
-        ("Kilometer", milage),
-        ("Max Power", max_power),
-        ("Engine", engine),
-        ("Seats", seats),
-        ("car_age", age),
-        ("log1p_mileage", log1p_mileage),
-        ("avg_km_per_year", avg_km_per_year),
-        ("hp_x_auto", hp_x_auto),
-        ("hp_div_avgkm", hp_div_avgkm),
-        ("power_per_cc", power_per_cc),
-        ("cc_per_seat", cc_per_seat),
-        # 频数特征在预测侧无真实值，设为 0 + missing=1
-        ("brand_count", np.nan),
-        ("model_count", np.nan),
-        ("brand_model_count", np.nan),
+        ("Year", year), ("Age", age), ("Kilometer", milage), ("Max Power", max_power),
+        ("Engine", engine), ("Seats", seats), ("car_age", age), ("log1p_mileage", log1p_mileage),
+        ("avg_km_per_year", avg_km_per_year), ("hp_x_auto", hp_x_auto), ("hp_div_avgkm", hp_div_avgkm),
+        ("power_per_cc", power_per_cc), ("cc_per_seat", cc_per_seat),
+        ("brand_count", np.nan), ("model_count", np.nan), ("brand_model_count", np.nan),
     ]:
         if name in _cols or (name + "_missing") in _cols:
             put_num(name, val)
 
-    # 类别特征
-    if "Brand" in _cols:
-        row["Brand"] = str(brand) if brand is not None else "Unknown"
-    if "Model" in _cols:
-        row["Model"] = str(model) if model is not None else "Unknown"
-    if "Transmission" in _cols:
-        row["Transmission"] = gear
-    if "Fuel Type" in _cols:
-        row["Fuel Type"] = fuel_type
-    if "period" in _cols:
-        row["period"] = period
-    if "period_bin" in _cols:
-        row["period_bin"] = period_bin
+    if "Brand" in _cols: row["Brand"] = str(brand) if brand is not None else "Unknown"
+    if "Model" in _cols: row["Model"] = str(model) if model is not None else "Unknown"
+    if "Transmission" in _cols: row["Transmission"] = gear
+    if "Fuel Type" in _cols: row["Fuel Type"] = fuel_type
+    if "period" in _cols: row["period"] = period
+    if "period_bin" in _cols: row["period_bin"] = period_bin
 
     final = []
     for c in _cols:
@@ -307,7 +295,6 @@ def build_row(d):
     return X, period, period_bin, age, brand, model
 
 
-# ===== 市场系数（含外部融合）=====
 def get_market_multiplier(period):
     if period in M_t_smooth:
         m_internal = float(M_t_smooth[period])
@@ -316,7 +303,6 @@ def get_market_multiplier(period):
     else:
         m_internal = 1.0
 
-    # 可选：外部时序融合（目前默认关闭）
     if EXT_ENABLE and EXT_FILE and os.path.exists(EXT_FILE):
         try:
             ext = json.load(open(EXT_FILE, encoding="utf-8"))
@@ -328,16 +314,11 @@ def get_market_multiplier(period):
     return m_internal
 
 
-# ===== 对外预测接口 =====
-def predict_price(d):
+def _base_predict_price(d):
     """
-    d 是一个 dict，键可以是：
-    brand, model, year, age, milage,
-    fuel_type, engine, max_power, transmission, seats,
-    listing_date(可选，YYYY-MM-DD)。
+    原始的基础预测流程：CatBoost + Market + BrandCal + CQR + Clamp
     """
     X, period, period_bin, age_val, brand, model = build_row(d)
-
     # CatBoost 模型输出 log(price)
     p10_log = m_p10.predict(X)
     p50_log = m_p50.predict(X)
@@ -392,7 +373,15 @@ def predict_price(d):
     }
 
 
-# 简单自测
+def predict_price(d):
+    """
+    最终对外接口：基础预测 -> Meta Learning 适配
+    """
+    base = _base_predict_price(d)
+    out = _FEWSHOT_ADAPTER.maybe_adapt(d, base)
+    return out
+
+
 if __name__ == "__main__":
     demo = {
         "brand": "Toyota",
