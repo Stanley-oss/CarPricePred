@@ -56,6 +56,9 @@ _cat_cols   = _meta.get("categorical_cols", [])
 _cat_idx    = _meta.get("categorical_indices", [])#_cat_cols / _cat_idx 标记了哪些是类别特征。
 alpha       = float(_meta.get("alpha", 0.20))
 #推理侧构造特征时，必须完全对齐 _cols，否则模型输入就会错位。
+# === 新增：few-shot 相关配置 & 特征权重 ===
+fewshot_cfg_meta       = _meta.get("fewshot_cfg", {})
+fewshot_feature_weights = _meta.get("fewshot_feature_weights", {})
 #市场指数相关
 market_info = _meta["market_index"]
 M_t_smooth  = market_info.get("M_t_smooth", {})
@@ -216,16 +219,25 @@ def get_market_multiplier(period):#get_market_multiplier(period) 负责根据 pe
 
 # ==== Few-shot 元学习 / 迁移模块 ====
 # 注意把 csv_path 改成你自己 Full_dataset.csv 的实际路径
-_FEWSHOT_CFG = FewShotConfig(#few-shot 的配置和初始化
-    csv_path=r"F:\Full_dataset.csv",  # ← 这里改成和 newcat.py 里用的一样，注意这里需要更改！！！
-    min_group_size=30,     # 认为样本>=30 就不需要 few-shot 调整
-    max_support_size=200,  # 支持集最多取 200 条
-    k_neighbors=50,        # KNN 取 50 个邻居
-    new_car_max_age=3.0,   # 车龄<=3 年大致认为是“新车”
+_FEWSHOT_CFG = FewShotConfig(
+    csv_path=fewshot_cfg_meta.get("csv_path", r"F:\Full_dataset.csv"),
+    min_group_size=int(fewshot_cfg_meta.get("min_group_size", 30)),
+    max_support_size=int(fewshot_cfg_meta.get("max_support_size", 200)),
+    k_neighbors=int(fewshot_cfg_meta.get("k_neighbors", 50)),
+    new_car_max_age=float(fewshot_cfg_meta.get("new_car_max_age", 3.0)),
+    iqr_to_width_factor=float(fewshot_cfg_meta.get("iqr_to_width_factor", 1.8)),
+    min_uncertainty_scale=float(
+        fewshot_cfg_meta.get("min_uncertainty_scale", 0.7)
+    ),
+    max_uncertainty_scale=float(
+        fewshot_cfg_meta.get("max_uncertainty_scale", 1.6)
+    ),
 )
 
-_FEWSHOT_ADAPTER = FewShotKnnMeta(_FEWSHOT_CFG)
-
+_FEWSHOT_ADAPTER = FewShotKnnMeta(
+    _FEWSHOT_CFG,
+    feature_weights=fewshot_feature_weights,
+)
 
 
 def _base_predict_price(d):
