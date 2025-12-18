@@ -274,12 +274,18 @@ def build_row(d):
         if name in _cols or (name + "_missing") in _cols:
             put_num(name, val)
 
-    if "Brand" in _cols: row["Brand"] = str(brand) if brand is not None else "Unknown"
-    if "Model" in _cols: row["Model"] = str(model) if model is not None else "Unknown"
-    if "Transmission" in _cols: row["Transmission"] = gear
-    if "Fuel Type" in _cols: row["Fuel Type"] = fuel_type
-    if "period" in _cols: row["period"] = period
-    if "period_bin" in _cols: row["period_bin"] = period_bin
+    if "Brand" in _cols:
+        row["Brand"] = str(brand) if brand is not None else "Unknown"
+    if "Model" in _cols:
+        row["Model"] = str(model) if model is not None else "Unknown"
+    if "Transmission" in _cols:
+        row["Transmission"] = gear
+    if "Fuel Type" in _cols:
+        row["Fuel Type"] = fuel_type
+    if "period" in _cols:
+        row["period"] = period
+    if "period_bin" in _cols:
+        row["period_bin"] = period_bin
 
     final = []
     for c in _cols:
