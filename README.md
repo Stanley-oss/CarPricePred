@@ -1,5 +1,9 @@
 # CarPricePred
+Demo for Catboost Model Prediction:
+![image](CatBoost_demo.png)
 
+Demo for ResNet Model Prediction:
+![image](ResNet_demo.png)
 # Setup:
 ## Backend:
 Windows:
