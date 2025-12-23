@@ -152,8 +152,8 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
                     control={<Radio />} 
                     label={
                       <Box>
-                        <Typography variant="body2" fontWeight="500">Catboost</Typography>
-                        <Typography variant="caption" color="text.secondary">Gradient Boosting (Detailed)</Typography>
+                        <Typography variant="body2" fontWeight="500">Catboost+Meta</Typography>
+                        <Typography variant="caption" color="text.secondary">Gradient Boosting</Typography>
                       </Box>
                     } 
                     sx={{ mr: 4 }}
@@ -164,7 +164,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
                     label={
                       <Box>
                         <Typography variant="body2" fontWeight="500">Resnet</Typography>
-                        <Typography variant="caption" color="text.secondary">Deep Learning (Simple)</Typography>
+                        <Typography variant="caption" color="text.secondary">Deep Learning</Typography>
                       </Box>
                     } 
                   />

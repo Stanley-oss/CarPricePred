@@ -97,7 +97,7 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({ data, loading }) => {
       </Typography>
 
       <Chip 
-        label={data.model_type.toUpperCase()} 
+        label={(data.model_type + '+meta').toUpperCase()} 
         color={data.model_type === 'catboost' ? 'secondary' : 'primary'} 
         size="small" 
         sx={{ mb: 3 }} 
